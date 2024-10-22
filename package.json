@@ -5,6 +5,9 @@
   "license": "MIT",
   "dependencies": {},
   "private": true,
+	"engines": {
+		"node": ">=16.0.0"
+	},
   "scripts": {
     "start": "yarn workspaces run start",
     "dev": "yarn workspaces run dev"

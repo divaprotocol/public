@@ -5,7 +5,14 @@ import { isAddress, parseUnits } from 'ethers/lib/utils'
 import { useToast } from '@chakra-ui/react'
 import Image from 'next/image'
 import Skeleton from 'react-loading-skeleton'
-import { useAccount, useNetwork, useSigner } from 'wagmi'
+import {
+  useAccount,
+  useNetwork,
+  useWalletClient,
+  useContractWrite,
+  useContractReads,
+} from "wagmi";
+import { getContract } from "wagmi/actions";
 import 'react-loading-skeleton/dist/skeleton.css'
 
 import ClaimDivaLinearVestingABI from '../abi/ClaimDivaLinearVestingABI.json'
@@ -21,11 +28,12 @@ import { Paragraph } from '../components/typography/Paragraph'
 import { Highlight } from '../components/typography/Highlight'
 import RewardPageBlobs from '../components/RewardPageBlobs'
 import TokenClaimInfo from '../components/TokenClaimInfo'
+import { TbX } from 'react-icons/tb'
 
 const Rewards = () => {
 	const { address: userAddress } = useAccount()
 	const { chain } = useNetwork()
-	const { data: signer } = useSigner()
+	const { data: signer } = useWalletClient()
 	const [rewardInfo, setRewardInfo] = useState<any>({})
 	const [proof, setProof] = useState<string[]>([])
 	const [isClaiming, setIsClaiming] = useState<boolean>(false)
@@ -48,17 +56,10 @@ const Rewards = () => {
 		return () => clearInterval(interval)
 	}, [])
 
-	const claimDivaLinearVesting = useMemo(
-		() =>
-			signer && chain?.id && config[chain?.id]?.claimDivaLinearVestingAddress
-				? new ethers.Contract(
-						config[chain?.id]?.claimDivaLinearVestingAddress,
-						ClaimDivaLinearVestingABI,
-						signer
-				  )
-				: null,
-		[chain, signer]
-	)
+	const claimDivaContact = {
+		address: config[chain?.id]?.claimDivaLinearVestingAddress,
+		abi: ClaimDivaLinearVestingABI as any,
+	}
 
 	const rewardBN = useMemo(
 		() =>
@@ -72,6 +73,55 @@ const Rewards = () => {
 		() => rewardBN?.mul(40).div(100),
 		[rewardBN]
 	)
+
+	const claimDivaRead = useContractReads({
+    contracts: [
+      {
+        ...claimDivaContact,
+        functionName: "trigger",
+      },
+      {
+        ...claimDivaContact,
+        functionName: "claimPeriodStarts",
+      },
+      {
+        ...claimDivaContact,
+        functionName: "claimedAmount",
+        args: [userAddress],
+      },
+      {
+        ...claimDivaContact,
+        functionName: "availableDrawDownAmount",
+        args: [
+          rewardBN,
+          rewardBN.sub(immediateClaimableAmount),
+          rewardInfo.time,
+          userAddress,
+        ],
+      },
+    ],
+  });
+
+	const claimDivaWrite = useContractWrite({
+    ...(claimDivaContact as any),
+    functionName: "claimTokens" as never,
+    args: [rewardBN, rewardInfo.time, proof] as never,
+  });
+
+	console.log({ claimDivaRead, claimDivaWrite });
+
+	const claimDivaLinearVesting = useMemo(
+    () =>
+      signer && chain?.id && config[chain?.id]?.claimDivaLinearVestingAddress
+        ? getContract({
+            address: config[chain?.id]?.claimDivaLinearVestingAddress,
+            abi: ClaimDivaLinearVestingABI,
+          })
+        : null,
+    [chain, signer]
+  );
+
+
 
 	const currentTimestamp = useMemo(() => Math.floor(+new Date() / 1000), [])
 
@@ -134,67 +184,11 @@ const Rewards = () => {
 		}
 	}, [userAddress])
 
-	useEffect(() => {
-		const getTrigger = async () => {
-			setTrigger(await claimDivaLinearVesting.trigger())
-		}
-		const getClaimPeriodStarts = async () => {
-			setClaimPeriodStarts(
-				(await claimDivaLinearVesting.claimPeriodStarts()).toNumber()
-			)
-		}
-		if (claimDivaLinearVesting) {
-			Promise.all([getTrigger(), getClaimPeriodStarts()])
-		}
-	}, [claimDivaLinearVesting, count])
-
-	useEffect(() => {
-		const getClaimedAmount = async () => {
-			setClaimedAmount(await claimDivaLinearVesting.claimedAmount(userAddress))
-		}
-		if (claimDivaLinearVesting && userAddress) {
-			getClaimedAmount()
-		}
-	}, [claimDivaLinearVesting, userAddress, count])
-
-	useEffect(() => {
-		const getAvailableDrawDownAmount = async () => {
-			setAvailableDrawDownAmount(
-				await claimDivaLinearVesting.availableDrawDownAmount(
-					rewardBN,
-					rewardBN.sub(immediateClaimableAmount),
-					rewardInfo.time,
-					userAddress
-				)
-			)
-		}
-		if (
-			claimDivaLinearVesting &&
-			userAddress &&
-			rewardBN.gt(0) &&
-			immediateClaimableAmount
-		) {
-			getAvailableDrawDownAmount()
-		}
-	}, [
-		claimDivaLinearVesting,
-		userAddress,
-		rewardBN,
-		immediateClaimableAmount,
-		count,
-		rewardInfo,
-	])
-
 	const claim = useCallback(async () => {
 		if (claimableAmount.gt(0)) {
 			setIsClaiming(true)
 			try {
-				const tx = await claimDivaLinearVesting.claimTokens(
-					rewardBN,
-					rewardInfo.time,
-					proof
-				)
-				await tx.wait()
+				await claimDivaWrite.writeAsync();
 				setCount((count) => count + 1)
 			} catch (error) {
 				toast({
@@ -209,14 +203,7 @@ const Rewards = () => {
 			}
 			setIsClaiming(false)
 		}
-	}, [
-		claimableAmount,
-		rewardBN,
-		rewardInfo.time,
-		proof,
-		claimDivaLinearVesting,
-		toast,
-	])
+	}, [claimableAmount, claimDivaWrite, toast])
 
 	return (
 		<PageLayout>
